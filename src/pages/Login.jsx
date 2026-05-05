@@ -1,30 +1,111 @@
 // src/pages/Login.jsx
-import React from 'react';
+import React, { useState } from 'react';
 import { loginWithGoogle } from '../firebase';
 
-export default function Login() {
+export default function Login({ requireCode, onCodeSuccess, onCancel }) {
+  const [code, setCode] = useState('');
+  const [codeError, setCodeError] = useState('');
+
+  const handleVerifyCode = () => {
+    // Convertimos a mayúsculas y quitamos espacios para evitar errores de tipeo
+    if (code.trim().toUpperCase() === 'DTMEX') {
+      setCodeError('');
+      onCodeSuccess(); // Le avisa a App.jsx que lo deje pasar
+    } else {
+      setCodeError('Código incorrecto. Acceso denegado.');
+    }
+  };
+
   return (
     <div style={styles.container}>
       <div style={styles.card}>
-        {/* Icono decorativo - Un poco más pequeño */}
         <div style={styles.iconContainer}>🏎️</div>
 
-        {/* Título con F1 en ROJO */}
         <h1 style={styles.title}>
-          <span style={{ color: '#e10600' }}>F1</span> FANTASY 2026
+          <span style={{ color: '#e10600' }}>F1</span> QUINIELA 2026
         </h1>
 
-        <p style={styles.subtitle}>Ingresa para seleccionar a tus pilotos.</p>
+        {/* SI NO REQUIERE CÓDIGO, MOSTRAMOS EL LOGIN NORMAL */}
+        {!requireCode ? (
+          <>
+            <p style={styles.subtitle}>Ingresa para seleccionar a tus pilotos.</p>
+            <button onClick={loginWithGoogle} style={styles.button}>
+              <img
+                src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg"
+                alt="Google Logo"
+                style={styles.googleIcon}
+              />
+              Ingresar con Google
+            </button>
+          </>
+        ) : (
+          /* SI REQUIERE CÓDIGO, MOSTRAMOS LA ENTRADA VIP */
+          <>
+            <p style={{ ...styles.subtitle, color: '#e10600', fontWeight: 'bold' }}>
+              🔒 Liga Privada
+            </p>
+            <p style={{ fontSize: '0.9rem', color: '#555', marginBottom: '15px' }}>
+              Si estas viendo esto es porque <strong>ingresaste con un correo diferente</strong> o porque no eres parte del grupo. Ingresa el código de invitación para unirte a la quiniela.
+            </p>
 
-        <button onClick={loginWithGoogle} style={styles.button}>
-          {/* URL OFICIAL DE GOOGLE */}
-          <img
-            src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg"
-            alt="Google Logo"
-            style={styles.googleIcon}
-          />
-          Ingresar con Google
-        </button>
+            {codeError && (
+              <div style={{ color: '#dc3545', marginBottom: '10px', fontSize: '0.85rem', fontWeight: 'bold' }}>
+                🚫 {codeError}
+              </div>
+            )}
+
+            <input
+              type="text"
+              placeholder="CÓDIGO SECRETO"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '12px',
+                borderRadius: '8px',
+                border: '1px solid #ccc',
+                marginBottom: '15px',
+                fontSize: '1rem',
+                textAlign: 'center',
+                textTransform: 'uppercase',
+                boxSizing: 'border-box',
+                fontWeight: 'bold',
+                letterSpacing: '2px'
+              }}
+            />
+
+            <button
+              onClick={handleVerifyCode}
+              style={{
+                width: '100%',
+                padding: '12px',
+                backgroundColor: '#1a1a1a',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                marginBottom: '10px'
+              }}
+            >
+              Verificar Código
+            </button>
+
+            <button
+              onClick={onCancel}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#888',
+                cursor: 'pointer',
+                textDecoration: 'underline',
+                fontSize: '0.85rem'
+              }}
+            >
+              Cancelar y salir
+            </button>
+          </>
+        )}
 
         <div style={styles.footer}>Temporada Oficial 2026</div>
       </div>
@@ -33,8 +114,8 @@ export default function Login() {
 }
 
 const styles = {
+  // ... el resto de tus estilos se mantienen exactamente igual
   container: {
-    // CAMBIO CLAVE: position fixed asegura que cubra TODO sin bordes blancos
     position: 'fixed',
     top: 0,
     left: 0,
@@ -43,67 +124,57 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    // Fondo degradado elegante (Rojo F1 a Oscuro)
-    background:
-      'linear-gradient(135deg, #101010 0%, #1a1a1a 50%, #e10600 100%)',
+    background: 'linear-gradient(135deg, #101010 0%, #1a1a1a 50%, #e10600 100%)',
     fontFamily: "'Segoe UI', Roboto, sans-serif",
-    zIndex: 9999, // Asegura que esté encima de todo
   },
   card: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    // CAMBIO: Menos padding para que no se vea gigante en celular
-    padding: '30px 20px',
-    borderRadius: '20px', // Bordes un poco menos redondos para ahorrar espacio
-    boxShadow: '0 20px 40px rgba(0,0,0,0.4)',
+    backgroundColor: 'white',
+    padding: '40px 30px',
+    borderRadius: '20px',
+    boxShadow: '0 20px 40px rgba(0,0,0,0.3)',
     textAlign: 'center',
-    // CAMBIO: Ancho máximo un poco más angosto para elegancia
-    maxWidth: '360px',
-    width: '85%', // Deja margen a los lados en cels muy pequeños
-    backdropFilter: 'blur(10px)',
+    maxWidth: '400px',
+    width: '90%',
   },
   iconContainer: {
-    fontSize: '2.5rem', // Reducido de 3rem
-    marginBottom: '5px',
+    fontSize: '3rem',
+    marginBottom: '10px',
   },
   title: {
-    margin: '0 0 8px 0',
-    color: '#111',
-    fontSize: '1.8rem', // Reducido de 2rem para que quepa en una línea en cels
+    margin: '0 0 10px 0',
+    fontSize: '2rem',
     fontWeight: '900',
-    letterSpacing: '-1px',
-    textTransform: 'uppercase',
-    fontStyle: 'italic',
+    color: '#1a1a1a',
   },
   subtitle: {
     color: '#666',
     margin: '0 0 25px 0',
-    lineHeight: '1.4',
-    fontSize: '0.95rem', // Letra un pelín más chica
+    fontSize: '1rem',
   },
   button: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '10px',
     width: '100%',
-    padding: '12px', // Botón un poco más compacto
-    backgroundColor: '#fff',
-    border: '2px solid #e1e1e1',
-    borderRadius: '10px',
-    fontSize: '0.95rem',
-    fontWeight: '600',
+    padding: '12px',
+    backgroundColor: 'white',
     color: '#333',
+    border: '1px solid #ccc',
+    borderRadius: '8px',
+    fontSize: '1rem',
+    fontWeight: 'bold',
     cursor: 'pointer',
-    transition: 'all 0.2s',
     boxShadow: '0 4px 6px rgba(0,0,0,0.05)',
+    transition: 'all 0.2s',
   },
   googleIcon: {
-    width: '20px',
-    height: '20px',
+    width: '24px',
+    height: '24px',
+    marginRight: '10px',
   },
   footer: {
-    marginTop: '20px',
-    fontSize: '0.7rem',
+    marginTop: '25px',
+    fontSize: '0.8rem',
     color: '#999',
     textTransform: 'uppercase',
     letterSpacing: '1px',

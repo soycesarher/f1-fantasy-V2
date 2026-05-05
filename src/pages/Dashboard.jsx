@@ -75,8 +75,8 @@ export default function Dashboard() {
     onConfirm: null,
   });
 
-  // --- LÓGICA DE TIERS ---
-  const tierGroups = {
+  // --- LÓGICA DE TIERS Y REGLA DE 4 CARRERAS ---
+  let tierGroups = {
     banned: driverStandings.slice(0, 2),
     tier1: driverStandings.slice(2, 6),
     tier2: driverStandings.slice(6, 10),
@@ -84,32 +84,114 @@ export default function Dashboard() {
   };
 
   const getDriverTier = (driverId) => {
-    if (tierGroups.banned.find((d) => d.id === driverId)) return 'banned';
-    if (tierGroups.tier1.find((d) => d.id === driverId)) return 'tier1';
-    if (tierGroups.tier2.find((d) => d.id === driverId)) return 'tier2';
-    if (tierGroups.tier3.find((d) => d.id === driverId)) return 'tier3';
+    if (tierGroups.banned.find((d) => String(d.id) === String(driverId))) return 'banned';
+    if (tierGroups.tier1.find((d) => String(d.id) === String(driverId))) return 'tier1';
+    if (tierGroups.tier2.find((d) => String(d.id) === String(driverId))) return 'tier2';
+    if (tierGroups.tier3.find((d) => String(d.id) === String(driverId))) return 'tier3';
     return 'unknown';
   };
 
-  // 1. AUTO-REGISTRO
+  // ============================================================================
+  // MOTOR ESTRICTO DE VALIDACIÓN: REGLA DE 4 CARRERAS (Validado al 100%)
+  // ============================================================================
+  const getRuleBlockedDrivers = () => {
+    // 1. Si no hay datos, no bloqueamos a nadie
+    if (!auth?.currentUser || !rivalsData || !currentRace) return [];
+
+    // 2. Obtenemos estrictamente las carreras pasadas de ESTE usuario, ordenadas cronológicamente
+    const myPastRaces = rivalsData
+      .filter((r) => r.userId === auth.currentUser.uid && Number(r.raceId) < Number(currentRace.id))
+      .sort((a, b) => Number(a.raceId) - Number(b.raceId));
+
+    const blockedIds = [];
+
+    // 3. Mapeo inquebrantable a los índices de Firebase (Obligatorio G1->G2->G3)
+    const tierMapping = { tier1: 0, tier2: 1, tier3: 2 };
+
+    // 4. Evaluamos grupo por grupo de forma totalmente independiente
+    ['tier1', 'tier2', 'tier3'].forEach((tier) => {
+      const driverIndex = tierMapping[tier];
+
+      // 5. Extraemos la "columna" de historial solo para este índice (Grupo)
+      const pastDrivers = myPastRaces
+        .map((race) => {
+          // Seguridad extra: Validar que exista el array y la posición
+          const d = race.drivers && race.drivers.length > driverIndex ? race.drivers[driverIndex] : null;
+          return d ? String(d.id) : null; // Todo a String para evitar errores de tipo
+        })
+        .filter((id) => id !== null);
+
+      const n = pastDrivers.length;
+
+      // 6. Sometemos a cada piloto disponible HOY a la simulación estricta
+      tierGroups[tier].forEach((driver) => {
+        let isBlocked = false;
+        const currentDriverId = String(driver.id);
+
+        // --- REGLA A: Prevención de 3 iguales consecutivos ---
+        // Aplica si al menos tienes 2 carreras jugadas
+        if (n >= 2) {
+          if (pastDrivers[n - 1] === pastDrivers[n - 2] && pastDrivers[n - 1] === currentDriverId) {
+            isBlocked = true;
+          }
+        }
+
+        // --- REGLA B: Ventana estricta de 4 carreras (Mínimo 3 diferentes) ---
+        // Aplica si al menos tienes 3 carreras jugadas y el piloto no ha sido bloqueado por la Regla A
+        if (n >= 3 && !isBlocked) {
+          // Creamos un ecosistema con los 3 últimos elegidos + el intento de hoy
+          const windowSet = new Set([
+            pastDrivers[n - 1], // Hace 1 carrera
+            pastDrivers[n - 2], // Hace 2 carreras
+            pastDrivers[n - 3], // Hace 3 carreras
+            currentDriverId,    // El piloto que estás intentando elegir hoy
+          ]);
+
+          // Si en este ecosistema de 4 espacios hay menos de 3 individuos únicos... BLOQUEO INMEDIATO.
+          if (windowSet.size < 3) {
+            isBlocked = true;
+          }
+        }
+
+        // 7. Si el piloto reprobó la simulación, a la lista negra
+        if (isBlocked) {
+          // Evitamos IDs duplicados por si acaso
+          if (!blockedIds.includes(driver.id)) {
+            blockedIds.push(driver.id);
+          }
+        }
+      });
+    });
+
+    return blockedIds; // Retornamos la lista de IDs condenados
+  };
+
+
+  const ruleBlockedDrivers = getRuleBlockedDrivers();
+
+  // Inyectamos la propiedad 'isRuleBlocked' a los pilotos para que la UI sepa cuáles bloquear visualmente
+  tierGroups = {
+    ...tierGroups,
+    tier1: tierGroups.tier1.map(d => ({ ...d, isRuleBlocked: ruleBlockedDrivers.includes(d.id) })),
+    tier2: tierGroups.tier2.map(d => ({ ...d, isRuleBlocked: ruleBlockedDrivers.includes(d.id) })),
+    tier3: tierGroups.tier3.map(d => ({ ...d, isRuleBlocked: ruleBlockedDrivers.includes(d.id) })),
+  };
+
+
+  // 1. VERIFICAR ADMIN (El registro de usuarios nuevos ya lo maneja App.jsx con el código VIP)
   useEffect(() => {
-    async function ensureUserInDB() {
+    async function checkAdmin() {
       if (!auth.currentUser) return;
       const userRef = doc(db, 'users', auth.currentUser.uid);
       const userSnap = await getDoc(userRef);
 
-      if (!userSnap.exists()) {
-        await setDoc(userRef, {
-          name: auth.currentUser.displayName || 'Nuevo Piloto',
-          totalPoints: 0,
-          isAdmin: false,
-        });
-      }
-      if (userSnap.exists() && userSnap.data().isAdmin === true)
+      if (userSnap.exists() && userSnap.data().isAdmin === true) {
         setIsAdmin(true);
+      }
     }
-    ensureUserInDB();
+    checkAdmin();
   }, []);
+
 
   // 2. ESCUCHAR SWITCH
   useEffect(() => {
@@ -290,12 +372,12 @@ export default function Dashboard() {
       return;
     }
     const names = pendingUsers.map((u) => u.name).join(', ');
-    const message = `🏎️ *F1 FANTASY ALERT* 🚨\n\nFaltan por seleccionar pilotos para el *${currentRace.name}*:\n\n⏳ ${names}\n\n¡Apúrense antes de que cierre la pista! 🏁`;
+    const message = `🏎️ *QUINIELA F1* 🚨\n\nFaltan por seleccionar pilotos para el *${currentRace.name}*:\n\n⏳ ${names}\n\n¡🏁🏁🏁! 🏁`;
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
   };
 
   const sendGeneralAlert = () => {
-    const message = `🏎️ *F1 FANTASY* \n\n¡Este fin de semana hay carrera! 🏁\n\n*${currentRace.name}*\n\nNo olviden armar su estrategia y elegir pilotos antes de la Qualy.\n\n¡Nos vemos en la pista! 🏆`;
+    const message = `🏎️ *QUINIELA F1* \n\n¡Este fin de semana hay carrera! 🏁\n\n*${currentRace.name}*\n\nNo olviden elegir pilotos antes de la Qualy/Sprint.\n\n¡🏁🏁🏁! 🏆`;
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
   };
 
@@ -352,14 +434,63 @@ export default function Dashboard() {
       return;
     }
 
+    // --- NUEVO: VALIDACIÓN DE REGLA 4 CARRERAS ---
+    // Si el piloto que intentan tocar está en la lista negra calculada
+    if (ruleBlockedDrivers.includes(driver.id)) {
+      showModal(
+        'Piloto Bloqueado (Regla 4 Carreras)',
+        'No puedes elegir a este piloto porque tendrías menos de 3 pilotos diferentes en las últimas 4 carreras.',
+        'alert'
+      );
+      return;
+    }
+    // ---------------------------------------------
+
+    // --- REGLA ESTRICTA: Orden G1 -> G2 -> G3 ---
+    const isAlreadySelected = selectedDrivers.find((d) => d.id === driver.id);
+    const hasTier1Selected = selectedDrivers.some((d) => getDriverTier(d.id) === 'tier1');
+    const hasTier2Selected = selectedDrivers.some((d) => getDriverTier(d.id) === 'tier2');
+
+    if (!isAlreadySelected) {
+      if (tier === 'tier2' && !hasTier1Selected) {
+        showModal(
+          'Selección Bloqueada',
+          'Debes elegir PRIMERO un piloto del Grupo 1.',
+          'alert'
+        );
+        return;
+      }
+
+      if (tier === 'tier3' && (!hasTier1Selected || !hasTier2Selected)) {
+        showModal(
+          'Selección Bloqueada',
+          'Debes elegir pilotos del Grupo 1 y Grupo 2 ANTES de elegir uno del Grupo 3.',
+          'alert'
+        );
+        return;
+      }
+    }
+    // -----------------------------------------------------------
+
     const existingDriverInTier = selectedDrivers.find(
       (d) => getDriverTier(d.id) === tier
     );
 
     if (existingDriverInTier) {
       if (existingDriverInTier.id === driver.id) {
-        setSelectedDrivers(selectedDrivers.filter((d) => d.id !== driver.id));
+        // --- DESELECCIÓN EN CASCADA ---
+        if (tier === 'tier1') {
+          setSelectedDrivers([]);
+        } else if (tier === 'tier2') {
+          setSelectedDrivers(
+            selectedDrivers.filter((d) => getDriverTier(d.id) === 'tier1')
+          );
+        } else {
+          setSelectedDrivers(selectedDrivers.filter((d) => d.id !== driver.id));
+        }
+        // -------------------------------------
       } else {
+        // CAMBIO DE PILOTO EN EL MISMO GRUPO (Swap)
         const newSelection = selectedDrivers.filter(
           (d) => d.id !== existingDriverInTier.id
         );
@@ -377,6 +508,8 @@ export default function Dashboard() {
       }
     }
   };
+
+
 
   const handleSaveClick = () => {
     if (!isSelectionOpen) {
@@ -785,8 +918,8 @@ export default function Dashboard() {
                     color: isConfidential
                       ? '#ccc'
                       : entry.points > 0
-                      ? '#e10600'
-                      : '#ccc',
+                        ? '#e10600'
+                        : '#ccc',
                   }}
                 >
                   {isConfidential ? '?' : entry.points}
@@ -824,23 +957,46 @@ export default function Dashboard() {
       >
         {drivers.map((driver) => {
           const isSelected = selectedDrivers.find((d) => d.id === driver.id);
-          const effectiveBlocked =
-            hasPlayed || isBlocked || (!isSelectionOpen && !hasPlayed);
+
+          // 1. Bloqueo global (ya jugaste o selección cerrada)
+          const isGlobalLocked = hasPlayed || (!isSelectionOpen && !hasPlayed);
+
+          // 2. Bloqueo secuencial (esperando al G1 o G2)
+          const isSequentialBlocked = isBlocked;
+
+          // 3. Bloqueo de los demás pilotos del mismo grupo si ya elegiste uno
+          const isAnotherSelectedInTier =
+            currentRace.id !== 1 &&
+            selectedDrivers.some((sd) => drivers.some((d) => d.id === sd.id)) &&
+            !isSelected;
+
+          // 4. Se pone gris si cumple CUALQUIERA de las condiciones de bloqueo
+          const isVisuallyGrayedOut = isGlobalLocked || isSequentialBlocked || driver.isRuleBlocked || isAnotherSelectedInTier;
+
+          // 5. El candado SOLO sale por penalización de reglas, baneados o si el juego cerró.
+          const showLockIcon = driver.isRuleBlocked || tierName === 'banned' || isGlobalLocked;
+
+          // 6. NUEVO: ¿Está completamente deshabilitado el clic?
+          // Deshabilitamos el clic si el juego cerró (global) o si hay otro seleccionado en el mismo grupo.
+          // (Nota: No bloqueamos el clic en isSequentialBlocked ni en ruleBlocked para que el usuario pueda hacer clic y ver el modal que le explica por qué no puede elegirlo).
+          const isClickDisabled = isGlobalLocked || isAnotherSelectedInTier;
 
           return (
             <div
               key={driver.id}
-              onClick={() => !effectiveBlocked && toggleDriver(driver)}
+              // AQUÍ ESTÁ LA MAGIA: Si está deshabilitado, el clic es ignorado por completo.
+              onClick={() => !isClickDisabled && toggleDriver(driver)}
               style={{
                 border: isSelected
                   ? `3px solid ${driver.color}`
-                  : `1px solid ${effectiveBlocked ? '#eee' : '#ddd'}`,
+                  : `1px solid ${isVisuallyGrayedOut ? '#eee' : '#ddd'}`,
                 borderRadius: '12px',
                 padding: '10px',
                 textAlign: 'center',
-                backgroundColor: effectiveBlocked ? '#f9f9f9' : 'white',
-                opacity: effectiveBlocked && !isSelected ? 0.5 : 1,
-                cursor: effectiveBlocked ? 'default' : 'pointer',
+                backgroundColor: isVisuallyGrayedOut ? '#f9f9f9' : 'white',
+                opacity: isVisuallyGrayedOut && !isSelected ? 0.5 : 1,
+                // Cambiamos el cursor a "prohibido" si está deshabilitado
+                cursor: isClickDisabled ? 'not-allowed' : 'pointer',
                 transform: isSelected ? 'translateY(-4px)' : 'none',
                 boxShadow: isSelected
                   ? '0 8px 20px rgba(0,0,0,0.1)'
@@ -860,7 +1016,7 @@ export default function Dashboard() {
                     borderRadius: '8px',
                     marginBottom: '8px',
                     filter:
-                      effectiveBlocked && !isSelected
+                      isVisuallyGrayedOut && !isSelected
                         ? 'grayscale(100%)'
                         : 'none',
                   }}
@@ -886,7 +1042,7 @@ export default function Dashboard() {
                     ✓
                   </div>
                 )}
-                {effectiveBlocked && !isSelected && (
+                {showLockIcon && !isSelected && (
                   <div
                     style={{
                       position: 'absolute',
@@ -992,7 +1148,7 @@ export default function Dashboard() {
           >
             F1
           </span>{' '}
-          FANTASY
+          Quiniela
         </h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <button
@@ -1263,7 +1419,7 @@ export default function Dashboard() {
                     paddingBottom: '10px',
                   }}
                 >
-                  🚦 Estado de la Parrilla
+                  🚦 Jugadores
                 </h3>
                 <div style={{ marginBottom: '20px' }}>
                   <h4
@@ -1459,6 +1615,59 @@ export default function Dashboard() {
             </div>
           </div>
 
+          {/* ========================================================= */}
+          {/* PANEL DE DEBUG (OCULTO PARA PRODUCCIÓN)                     */}
+          {/* 🛠️ Para volver a verlo, cambia el "false" de abajo a "true" */}
+          {/* ========================================================= */}
+          {false && (
+            <div style={{
+              background: '#1a1a1a',
+              color: '#00ff00',
+              padding: '15px',
+              borderRadius: '8px',
+              marginBottom: '20px',
+              fontFamily: 'monospace',
+              fontSize: '13px',
+              border: '2px dashed #ff0000'
+            }}>
+              <h4 style={{ margin: '0 0 10px 0', color: '#fff' }}>🛠️ MODO DEBUG: Regla 4 Carreras</h4>
+
+              <p style={{ margin: '5px 0' }}>
+                Carreras pasadas encontradas en la BD para ti:
+                <strong style={{ color: 'yellow', marginLeft: '5px' }}>
+                  {rivalsData?.filter((r) => r.userId === auth?.currentUser?.uid && Number(r.raceId) < Number(currentRace?.id)).length || 0}
+                </strong>
+              </p>
+
+              <div style={{ background: '#000', padding: '10px', borderRadius: '5px', margin: '10px 0' }}>
+                <strong style={{ color: '#fff' }}>📋 Detalle de tus selecciones pasadas (Por Índice):</strong>
+                {rivalsData
+                  ?.filter((r) => r.userId === auth?.currentUser?.uid && Number(r.raceId) < Number(currentRace?.id))
+                  .sort((a, b) => Number(a.raceId) - Number(b.raceId))
+                  .map(race => (
+                    <div key={race.raceId} style={{ marginTop: '8px', borderBottom: '1px solid #333', paddingBottom: '8px' }}>
+                      <span style={{ color: '#00ffff' }}>Carrera {race.raceId} ({race.raceName}):</span>
+                      <ul style={{ margin: '4px 0 0 20px', padding: 0, color: '#ccc', listStyleType: 'square' }}>
+                        {race.drivers?.map((d, idx) => (
+                          <li key={d.id}>
+                            {d.name} <span style={{ color: '#888' }}>(ID: {d.id})</span> - Guardado como: <strong style={{ color: 'orange' }}>Grupo {idx + 1}</strong>
+                          </li>
+                        )) || <li>Sin pilotos</li>}
+                      </ul>
+                    </div>
+                  ))}
+              </div>
+
+              <hr style={{ borderColor: '#333', margin: '10px 0' }} />
+
+              <p style={{ margin: '5px 0' }}><strong>🚫 Bloqueados G1:</strong> {tierGroups.tier1.filter(d => ruleBlockedDrivers.includes(d.id)).map(d => d.name).join(', ') || 'Ninguno'}</p>
+              <p style={{ margin: '5px 0' }}><strong>🚫 Bloqueados G2:</strong> {tierGroups.tier2.filter(d => ruleBlockedDrivers.includes(d.id)).map(d => d.name).join(', ') || 'Ninguno'}</p>
+              <p style={{ margin: '5px 0' }}><strong>🚫 Bloqueados G3:</strong> {tierGroups.tier3.filter(d => ruleBlockedDrivers.includes(d.id)).map(d => d.name).join(', ') || 'Ninguno'}</p>
+            </div>
+          )}
+          {/* ========================================================= */}
+
+
           <h3
             style={{
               margin: '0 0 15px 0',
@@ -1486,6 +1695,24 @@ export default function Dashboard() {
             )}
           </h3>
 
+          {/* NUEVA LEYENDA INFORMATIVA */}
+          <div
+            style={{
+              backgroundColor: '#f8f9fa',
+              borderLeft: '4px solid #007bff',
+              padding: '12px 15px',
+              borderRadius: '0 8px 8px 0',
+              marginBottom: '25px',
+              fontSize: '0.85rem',
+              color: '#555',
+              lineHeight: '1.5',
+            }}
+          >
+            💡 <strong>Tip:</strong> Para cambiar a un piloto, haz clic sobre él para <strong>desmarcarlo</strong>.
+            Esto reiniciará tu selección y podrás hacer cambios. <strong>Una vez confirmados tus 3 pilotos ya no podrás modificar tu selección</strong>
+          </div>
+
+
           {/* GRID DE SELECCIÓN POR TIERS */}
           {/* GRID DE SELECCIÓN POR TIERS */}
           <DriverGroup
@@ -1512,14 +1739,21 @@ export default function Dashboard() {
             title="🥈 Group 2"
             drivers={tierGroups.tier2}
             tierName="tier2"
-            isBlocked={false}
+            isBlocked={
+              currentRace.id !== 1 &&
+              !selectedDrivers.some((d) => getDriverTier(d.id) === 'tier1')
+            }
             color="#C0C0C0"
           />
           <DriverGroup
             title="🥉 Group 3"
             drivers={tierGroups.tier3}
             tierName="tier3"
-            isBlocked={false}
+            isBlocked={
+              currentRace.id !== 1 &&
+              (!selectedDrivers.some((d) => getDriverTier(d.id) === 'tier1') ||
+                !selectedDrivers.some((d) => getDriverTier(d.id) === 'tier2'))
+            }
             color="#cd7f32"
           />
 
@@ -1543,8 +1777,8 @@ export default function Dashboard() {
                   backgroundColor: !isSelectionOpen
                     ? '#999'
                     : selectedDrivers.length === 3
-                    ? '#e10600'
-                    : '#333',
+                      ? '#e10600'
+                      : '#333',
                   color: 'white',
                   border: 'none',
                   borderRadius: '50px',
@@ -1561,8 +1795,8 @@ export default function Dashboard() {
                 {saving
                   ? 'Guardando...'
                   : !isSelectionOpen
-                  ? '🔒 SELECCIÓN CERRADA'
-                  : `CONFIRMAR (${selectedDrivers.length}/3)`}
+                    ? '🔒 SELECCIÓN CERRADA'
+                    : `CONFIRMAR (${selectedDrivers.length}/3)`}
               </button>
             </div>
           )}
@@ -1587,9 +1821,9 @@ export default function Dashboard() {
               textAlign: 'center',
             }}
           >
-            <h2 style={{ margin: 0, color: '#1a1a1a' }}>🏆 Fantasy League</h2>
+            <h2 style={{ margin: 0, color: '#1a1a1a' }}>🏆 Quiniela</h2>
             <p style={{ color: '#888', margin: '5px 0 0 0' }}>
-              Ranking de Amigos
+              Leaderboard
             </p>
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -2023,7 +2257,7 @@ export default function Dashboard() {
             </ul>
 
             <h3 style={{ color: '#1a1a1a', marginTop: '30px' }}>
-              🔄 Regla de Oro:
+              🔄 Regla principal:
             </h3>
             <div
               style={{
